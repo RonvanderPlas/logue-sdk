@@ -8,15 +8,14 @@
 
         [ bandlimited saw ] --+
                                +--> [ mix ] --> [ 4-pole ladder filter ] --> out
-        [ sub-osc, -1 oct  ] --+                    ^           ^
-                                              SHAPE = cutoff     |
+        [ sub-osc, -1 oct  ] --+   ^                ^           ^
+                          Param1 = Sub Mix    SHAPE = cutoff     |
                                                        SHIFT+SHAPE = resonance
 
     SHAPE and SHIFT+SHAPE are wired directly to the filter's cutoff and
     resonance, so together they behave like the two main knobs of a
-    Minimoog's filter section. Sub-oscillator level is still a fixed
-    placeholder constant for now -- that gets its own knob (Param 1-6) once
-    the core sound is dialed in.
+    Minimoog's filter section. Param1 ("Sub Mix") sets how much of the
+    sub-oscillator is blended in. The rest (Param 2-6) is unused so far.
 */
 
 #include "userosc.h"
@@ -139,6 +138,7 @@ namespace {
     float phaseSub = 0.f;  // sub-oscillator phase, runs at half the frequency
     float cutoffNorm = 0.f; // filter cutoff, 0..1 = Nyquist; set from SHAPE
     float resonance = 0.f;  // filter resonance, 0..k_resonanceMax; set from SHIFT+SHAPE
+    float subLevel = 0.35f; // sub-osc mix amount, 0..1; set from Param1 (Sub Mix)
     float ampEnv = 1.f;     // note-on declick ramp, 0 (silent) -> 1 (full level)
     MoogLadder ladder;
   };
@@ -146,8 +146,7 @@ namespace {
   State s_state;
 
   // --- Fixed placeholders. These become real knob-controlled parameters
-  //     (Param 1-6) in a later pass; see the project README. --
-  constexpr float k_subLevel    = 0.35f;   // sub-osc mix amount, 0..1
+  //     (Param 2-6) in a later pass; see the project README. --
   constexpr float k_cutoffMinHz = 60.f;    // SHAPE = 0   -> filter fully closed (dark/thumpy)
   constexpr float k_cutoffMaxHz = 7000.f;  // SHAPE = max -> filter fully open (bright/buzzy)
 
@@ -187,6 +186,7 @@ void OSC_CYCLE(const user_osc_param_t * const params, int32_t *yn, const uint32_
   float ampEnv = s_state.ampEnv;
   const float cutoffNorm = s_state.cutoffNorm;
   const float resonance = s_state.resonance;
+  const float subLevel = s_state.subLevel;
   MoogLadder &ladder = s_state.ladder;
 
   q31_t * __restrict y = (q31_t *)yn;
@@ -196,7 +196,7 @@ void OSC_CYCLE(const user_osc_param_t * const params, int32_t *yn, const uint32_
     const float saw = blep_saw(phase0, w0);
     const float sub = blep_square(phaseSub, wSub);
 
-    float raw = (1.f - k_subLevel) * saw + k_subLevel * sub;
+    float raw = (1.f - subLevel) * saw + subLevel * sub;
     raw = clip1m1f(raw); // keep the filter's input safely within +/-1
     raw *= ampEnv;        // fade in from the note-on phase reset (see OSC_NOTEON)
     ampEnv = clipmaxf(ampEnv + k_declickInc, 1.f);
@@ -262,6 +262,10 @@ void OSC_PARAM(uint16_t index, uint16_t value)
     s_state.resonance = shiftshape01 * k_resonanceMax;
     break;
   }
+  case k_user_osc_param_id1:
+    // Param1 "Sub Mix" (0-100%) -> sub-oscillator mix amount.
+    s_state.subLevel = clip01f(value * 0.01f);
+    break;
   default:
     break;
   }

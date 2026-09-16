@@ -9,8 +9,8 @@ file explains what it does and why, at a level above the code comments.
 ```
 [ bandlimited saw ] --+
                        +--> [ mix ] --> [ 4-pole ladder filter ] --> out
-[ sub-osc, -1 oct  ] --+                    ^           ^
-                                      SHAPE = cutoff     |
+[ sub-osc, -1 oct  ] --+   ^                ^           ^
+                    Param1 = Sub Mix  SHAPE = cutoff     |
                                                SHIFT+SHAPE = resonance
 ```
 
@@ -36,16 +36,17 @@ file explains what it does and why, at a level above the code comments.
   fine here since, unlike cutoff, resonance isn't a frequency — there's no
   perceptual reason to curve it. Together, SHAPE and SHIFT+SHAPE behave like
   the cutoff and resonance knobs on a Minimoog's filter section.
-- **Param 1–6** — not wired up yet.
+- **Param1 "Sub Mix"** → sub-oscillator mix amount, 0–100%, linear. Default
+  is whatever the panel/patch has it set to (likely 0% until you dial it in
+  for the first time).
+- **Param 2–6** — not wired up yet.
 
 ## What's still a fixed placeholder
 
-These are hardcoded constants at the top of `moogbass.cpp` for now, to be
-turned into real Param 1–6 params once the core sound is dialed in (see the
-constants `k_subLevel`, `k_cutoffMinHz`, `k_cutoffMaxHz`):
-
-- **Sub-oscillator level** (currently fixed at 35% mix)
-- The cutoff knob's **Hz range** (currently 60 Hz–7 kHz)
+The cutoff knob's **Hz range** (60 Hz–7 kHz, see `k_cutoffMinHz`/
+`k_cutoffMaxHz` in `moogbass.cpp`) is still a hardcoded constant. Left as-is
+for now since it already covers useful bass territory — worth revisiting if
+you want it darker/brighter at the extremes.
 
 ## Known limitations / open questions
 
