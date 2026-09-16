@@ -8,14 +8,15 @@
 
         [ bandlimited saw ] --+
                                +--> [ mix ] --> [ 4-pole ladder filter ] --> out
-        [ sub-osc, -1 oct  ] --+                        ^
-                                                   SHAPE knob = cutoff
+        [ sub-osc, -1 oct  ] --+                    ^           ^
+                                              SHAPE = cutoff     |
+                                                       SHIFT+SHAPE = resonance
 
-    The SHAPE knob is wired directly to the filter cutoff frequency, so
-    turning it "opens"/"closes" the filter exactly like the cutoff knob on a
-    Minimoog. Everything else below (resonance, sub level) is a fixed
-    placeholder constant for now -- those get their own knobs once the core
-    sound is dialed in.
+    SHAPE and SHIFT+SHAPE are wired directly to the filter's cutoff and
+    resonance, so together they behave like the two main knobs of a
+    Minimoog's filter section. Sub-oscillator level is still a fixed
+    placeholder constant for now -- that gets its own knob (Param 1-6) once
+    the core sound is dialed in.
 */
 
 #include "userosc.h"
@@ -137,6 +138,7 @@ namespace {
     float phase0 = 0.f;    // primary saw oscillator phase, wraps in [0,1)
     float phaseSub = 0.f;  // sub-oscillator phase, runs at half the frequency
     float cutoffNorm = 0.f; // filter cutoff, 0..1 = Nyquist; set from SHAPE
+    float resonance = 0.f;  // filter resonance, 0..k_resonanceMax; set from SHIFT+SHAPE
     float ampEnv = 1.f;     // note-on declick ramp, 0 (silent) -> 1 (full level)
     MoogLadder ladder;
   };
@@ -144,11 +146,16 @@ namespace {
   State s_state;
 
   // --- Fixed placeholders. These become real knob-controlled parameters
-  //     (Param 1-6 / SHIFT+SHAPE) in a later pass; see the project README. --
+  //     (Param 1-6) in a later pass; see the project README. --
   constexpr float k_subLevel    = 0.35f;   // sub-osc mix amount, 0..1
-  constexpr float k_resonance   = 1.4f;    // filter resonance, 0..~4 (self-osc near 4)
   constexpr float k_cutoffMinHz = 60.f;    // SHAPE = 0   -> filter fully closed (dark/thumpy)
   constexpr float k_cutoffMaxHz = 7000.f;  // SHAPE = max -> filter fully open (bright/buzzy)
+
+  // SHIFT+SHAPE -> resonance range. ~4.0 is where this filter model starts
+  // to self-oscillate; capped a bit under that (rather than mapping all the
+  // way to it) so the full knob travel stays a controllable growl instead
+  // of the last few percent suddenly screaming into feedback.
+  constexpr float k_resonanceMax = 3.8f;
 
   // Note-on declick ramp length. Resetting the oscillator phase to 0 on
   // every note-on (see OSC_NOTEON) makes the very first sample jump
@@ -179,6 +186,7 @@ void OSC_CYCLE(const user_osc_param_t * const params, int32_t *yn, const uint32_
   float phaseSub = s_state.phaseSub;
   float ampEnv = s_state.ampEnv;
   const float cutoffNorm = s_state.cutoffNorm;
+  const float resonance = s_state.resonance;
   MoogLadder &ladder = s_state.ladder;
 
   q31_t * __restrict y = (q31_t *)yn;
@@ -200,7 +208,7 @@ void OSC_CYCLE(const user_osc_param_t * const params, int32_t *yn, const uint32_
     // knock as it settles; that transient is exactly what you'd hear if a
     // reset were added back here, and it's most obvious at low cutoff where
     // the filter is slowest to settle.
-    const float filtered = ladder.process(raw, cutoffNorm, k_resonance);
+    const float filtered = ladder.process(raw, cutoffNorm, resonance);
 
     *y = f32_to_q31(clip1m1f(filtered));
 
@@ -243,6 +251,15 @@ void OSC_PARAM(uint16_t index, uint16_t value)
     const float shape01 = param_val_to_f32(value); // 0..1
     const float cutoffHz = k_cutoffMinHz * fastpowf(k_cutoffMaxHz / k_cutoffMinHz, shape01);
     s_state.cutoffNorm = cutoffHz * 2.f * k_samplerate_recipf; // Hz -> fraction of Nyquist
+    break;
+  }
+  case k_user_osc_param_shiftshape: {
+    // SHIFT+SHAPE knob (10-bit: 0..1023) -> filter resonance. Linear
+    // mapping is fine here (unlike cutoff, resonance isn't a frequency, so
+    // there's no perceptual reason to curve it) -- 0 = clean, k_resonanceMax
+    // = an edgy near-self-oscillating growl.
+    const float shiftshape01 = param_val_to_f32(value); // 0..1
+    s_state.resonance = shiftshape01 * k_resonanceMax;
     break;
   }
   default:
