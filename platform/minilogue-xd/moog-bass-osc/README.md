@@ -50,7 +50,12 @@ turned into real params once the core sound is dialed in (see the constants
   stay alias-free — worth revisiting once resonance becomes a real knob.
 - Phase resets on every note-on (see `OSC_NOTEON`), which gives a
   consistent, punchy attack transient but no "free-running" drift between
-  notes.
+  notes. To avoid an audible click from that reset, note-on re-arms a short
+  (2ms) amplitude ramp (`k_declickInc`) and, importantly, does **not** clear
+  the filter's internal memory — resetting a resonant filter's state right
+  before feeding it a fresh signal causes an audible "knock" as it
+  resettles, worst at low cutoff where the filter is slowest to settle.
+  (Found and fixed after hearing exactly this click on hardware.)
 
 ## Building
 

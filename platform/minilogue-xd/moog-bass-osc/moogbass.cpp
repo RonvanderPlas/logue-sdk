@@ -137,6 +137,7 @@ namespace {
     float phase0 = 0.f;    // primary saw oscillator phase, wraps in [0,1)
     float phaseSub = 0.f;  // sub-oscillator phase, runs at half the frequency
     float cutoffNorm = 0.f; // filter cutoff, 0..1 = Nyquist; set from SHAPE
+    float ampEnv = 1.f;     // note-on declick ramp, 0 (silent) -> 1 (full level)
     MoogLadder ladder;
   };
 
@@ -148,6 +149,15 @@ namespace {
   constexpr float k_resonance   = 1.4f;    // filter resonance, 0..~4 (self-osc near 4)
   constexpr float k_cutoffMinHz = 60.f;    // SHAPE = 0   -> filter fully closed (dark/thumpy)
   constexpr float k_cutoffMaxHz = 7000.f;  // SHAPE = max -> filter fully open (bright/buzzy)
+
+  // Note-on declick ramp length. Resetting the oscillator phase to 0 on
+  // every note-on (see OSC_NOTEON) makes the very first sample jump
+  // straight to the waveform's edge instead of continuing smoothly from
+  // wherever the last note left off -- an instant amplitude step. Ramping
+  // the signal up from silence over a couple of milliseconds hides that
+  // step; short enough that it still reads as an instant, punchy attack.
+  constexpr float k_declickTimeSec = 0.002f; // 2ms
+  constexpr float k_declickInc = 1.f / (k_declickTimeSec * k_samplerate);
 
 } // namespace
 
@@ -167,6 +177,7 @@ void OSC_CYCLE(const user_osc_param_t * const params, int32_t *yn, const uint32_
 
   float phase0 = s_state.phase0;
   float phaseSub = s_state.phaseSub;
+  float ampEnv = s_state.ampEnv;
   const float cutoffNorm = s_state.cutoffNorm;
   MoogLadder &ladder = s_state.ladder;
 
@@ -179,7 +190,16 @@ void OSC_CYCLE(const user_osc_param_t * const params, int32_t *yn, const uint32_
 
     float raw = (1.f - k_subLevel) * saw + k_subLevel * sub;
     raw = clip1m1f(raw); // keep the filter's input safely within +/-1
+    raw *= ampEnv;        // fade in from the note-on phase reset (see OSC_NOTEON)
+    ampEnv = clipmaxf(ampEnv + k_declickInc, 1.f);
 
+    // The filter's own memory is intentionally NOT cleared on note-on (see
+    // OSC_NOTEON) -- it keeps whatever state it was already in and carries
+    // on smoothly. Filters are continuous-in-time by nature, so re-exciting
+    // fresh silence-to-signal into a filter with resonance always causes a
+    // knock as it settles; that transient is exactly what you'd hear if a
+    // reset were added back here, and it's most obvious at low cutoff where
+    // the filter is slowest to settle.
     const float filtered = ladder.process(raw, cutoffNorm, k_resonance);
 
     *y = f32_to_q31(clip1m1f(filtered));
@@ -192,18 +212,19 @@ void OSC_CYCLE(const user_osc_param_t * const params, int32_t *yn, const uint32_
 
   s_state.phase0 = phase0;
   s_state.phaseSub = phaseSub;
+  s_state.ampEnv = ampEnv;
 }
 
 void OSC_NOTEON(const user_osc_param_t * const params)
 {
   (void)params;
-  // Restart both oscillator phases and clear the filter's memory on every
-  // note-on. That trades away subtle "free-running" drift between notes for
-  // a tighter, more consistent attack transient on every note -- a good
-  // default for a punchy bass voice.
+  // Restart both oscillator phases for a consistent attack on every note,
+  // and re-arm the declick ramp (see k_declickInc) to hide the resulting
+  // amplitude jump. The filter's memory is deliberately left alone -- see
+  // the comment in OSC_CYCLE.
   s_state.phase0 = 0.f;
   s_state.phaseSub = 0.f;
-  s_state.ladder.reset();
+  s_state.ampEnv = 0.f;
 }
 
 void OSC_NOTEOFF(const user_osc_param_t * const params)
