@@ -7,18 +7,22 @@ file explains what it does and why, at a level above the code comments.
 ## Signal flow
 
 ```
-[ bandlimited saw ] --+
+[ saw <-> square ] --+
                        +--> [ mix ] --> [ 4-pole ladder filter ] --> out
-[ sub-osc, -1 oct  ] --+   ^                ^           ^
-                    Param1 = Sub Mix  SHAPE = cutoff     |
-                                               SHIFT+SHAPE = resonance
+[ sub-osc, -1 oct  ] --+   ^   ^            ^           ^
+            Param2 = Osc Shape |      SHAPE = cutoff     |
+                  Param1 = Sub Mix            SHIFT+SHAPE = resonance
 ```
 
-1. **Sawtooth oscillator** — the primary tone source, generated with the
-   PolyBLEP technique so the waveform's edge doesn't alias at low bass notes.
-2. **Sub-oscillator** — a square wave exactly one octave below the saw,
-   mixed in underneath it to add low-end weight (a common trick on real
-   analog bass patches).
+1. **Primary oscillator** — a bandlimited (PolyBLEP) sawtooth by default,
+   morphing towards a square wave as "Osc Shape" increases. Saw is
+   bright/buzzy with every harmonic present; square is hollower/woodier
+   with only odd harmonics — genuinely different oscillator colors, not
+   just a filter setting.
+2. **Sub-oscillator** — a square wave exactly one octave below the primary
+   oscillator (independent of Osc Shape — always a plain octave-down
+   square), mixed in underneath to add low-end weight (a common trick on
+   real analog bass patches).
 3. **4-pole ladder filter** — a digital model of the classic Moog transistor
    ladder (24 dB/octave lowpass with resonance/feedback). This is what gives
    the sound its "Moog" character, and it's what **SHAPE** and **SHIFT+SHAPE**
@@ -39,7 +43,10 @@ file explains what it does and why, at a level above the code comments.
 - **Param1 "Sub Mix"** → sub-oscillator mix amount, 0–100%, linear. Default
   is whatever the panel/patch has it set to (likely 0% until you dial it in
   for the first time).
-- **Param 2–6** — not wired up yet.
+- **Param2 "Osc Shape"** → primary oscillator waveform, 0–100%, linear
+  crossfade from sawtooth (0%) to square (100%). This only affects the
+  primary oscillator, not the sub.
+- **Param 3–6** — not wired up yet.
 
 ## What's still a fixed placeholder
 

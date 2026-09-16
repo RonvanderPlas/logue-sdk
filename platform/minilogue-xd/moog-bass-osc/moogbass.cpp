@@ -6,16 +6,18 @@
 
     Signal flow, once per sample:
 
-        [ bandlimited saw ] --+
+        [ saw <-> square ] --+
                                +--> [ mix ] --> [ 4-pole ladder filter ] --> out
-        [ sub-osc, -1 oct  ] --+   ^                ^           ^
-                          Param1 = Sub Mix    SHAPE = cutoff     |
-                                                       SHIFT+SHAPE = resonance
+        [ sub-osc, -1 oct  ] --+   ^   ^            ^           ^
+                    Param2 = Osc Shape |      SHAPE = cutoff     |
+                          Param1 = Sub Mix            SHIFT+SHAPE = resonance
 
     SHAPE and SHIFT+SHAPE are wired directly to the filter's cutoff and
     resonance, so together they behave like the two main knobs of a
     Minimoog's filter section. Param1 ("Sub Mix") sets how much of the
-    sub-oscillator is blended in. The rest (Param 2-6) is unused so far.
+    sub-oscillator is blended in, and Param2 ("Osc Shape") morphs the
+    primary oscillator from sawtooth to square. The rest (Param 3-6) is
+    unused so far.
 */
 
 #include "userosc.h"
@@ -139,6 +141,7 @@ namespace {
     float cutoffNorm = 0.f; // filter cutoff, 0..1 = Nyquist; set from SHAPE
     float resonance = 0.f;  // filter resonance, 0..k_resonanceMax; set from SHIFT+SHAPE
     float subLevel = 0.35f; // sub-osc mix amount, 0..1; set from Param1 (Sub Mix)
+    float oscShape = 0.f;   // primary osc saw->square blend, 0..1; set from Param2 (Osc Shape)
     float ampEnv = 1.f;     // note-on declick ramp, 0 (silent) -> 1 (full level)
     MoogLadder ladder;
   };
@@ -187,16 +190,24 @@ void OSC_CYCLE(const user_osc_param_t * const params, int32_t *yn, const uint32_
   const float cutoffNorm = s_state.cutoffNorm;
   const float resonance = s_state.resonance;
   const float subLevel = s_state.subLevel;
+  const float oscShape = s_state.oscShape;
   MoogLadder &ladder = s_state.ladder;
 
   q31_t * __restrict y = (q31_t *)yn;
   const q31_t * const y_end = y + frames;
 
   for (; y != y_end; ++y) {
+    // Primary oscillator: crossfades from sawtooth (oscShape=0) to square
+    // (oscShape=1). A different waveform shape at the source changes the
+    // harmonic content feeding the filter -- saw is bright/buzzy with every
+    // harmonic present, square is hollower/woodier with only odd harmonics.
     const float saw = blep_saw(phase0, w0);
+    const float square = blep_square(phase0, w0);
+    const float osc0 = (1.f - oscShape) * saw + oscShape * square;
+
     const float sub = blep_square(phaseSub, wSub);
 
-    float raw = (1.f - subLevel) * saw + subLevel * sub;
+    float raw = (1.f - subLevel) * osc0 + subLevel * sub;
     raw = clip1m1f(raw); // keep the filter's input safely within +/-1
     raw *= ampEnv;        // fade in from the note-on phase reset (see OSC_NOTEON)
     ampEnv = clipmaxf(ampEnv + k_declickInc, 1.f);
@@ -265,6 +276,10 @@ void OSC_PARAM(uint16_t index, uint16_t value)
   case k_user_osc_param_id1:
     // Param1 "Sub Mix" (0-100%) -> sub-oscillator mix amount.
     s_state.subLevel = clip01f(value * 0.01f);
+    break;
+  case k_user_osc_param_id2:
+    // Param2 "Osc Shape" (0-100%) -> primary oscillator saw->square blend.
+    s_state.oscShape = clip01f(value * 0.01f);
     break;
   default:
     break;
