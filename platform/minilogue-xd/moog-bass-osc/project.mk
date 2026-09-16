@@ -6,7 +6,7 @@ PROJECT = moog_bass_osc
 
 UCSRC =
 
-UCXXSRC =
+UCXXSRC = moogbass.cpp
 
 UINCDIR =
 
