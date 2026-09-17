@@ -6,11 +6,11 @@
 
     Signal flow, once per sample:
 
-        [ Osc1: saw<->square, detuned ] --+
+        [ Osc1: saw<->square, -Detune ] --+
                                            +--> [ blend ] --+
-        [ Osc2: saw<->square, detuned ] --+                +--> [ mix ] --> [ 4-pole ladder filter ] --> out
+        [ Osc2: saw<->square, +Detune ] --+                +--> [ mix ] --> [ 4-pole ladder filter ] --> out
                                                              |        ^           ^
-        [ sub-osc, -1 oct, fixed to Osc1's root pitch ] -----+  SHAPE = cutoff     |
+        [ sub-osc, -1 oct, root pitch ] ---------------------+  SHAPE = cutoff     |
                                                                         SHIFT+SHAPE = resonance
 
     SHAPE and SHIFT+SHAPE are wired directly to the filter's cutoff and
@@ -18,16 +18,18 @@
     Minimoog's filter section.
 
     The oscillator section is two independent saw<->square oscillators
-    (Param1/2 = Osc1 Shape/Detune, Param3/4 = Osc2 Shape/Detune), each with
-    its own detune in cents, crossfaded together by Param5 ("Blend": 0% =
-    only Osc1, 100% = only Osc2, 50% = equal parts of both -- this is how
-    two slightly-detuned oscillators "fatten" a sound, since neither ever
-    lands in exactly the same place in its cycle as the other, so their
-    peaks and zero-crossings constantly drift in and out of alignment,
-    which the ear hears as movement/width rather than a single static
-    pitch). Param6 ("Sub Mix") blends in the sub-oscillator, which always
-    tracks the note's true pitch (unaffected by either oscillator's
-    detune) one octave down.
+    (Param1/2 = Osc1/Osc2 Shape), spread apart by a single Param3 "Detune"
+    (Osc1 goes flat, Osc2 goes sharp by the same amount, rather than two
+    independent detunes that could drift the pair out of tune with the
+    note itself), crossfaded together by Param4 ("Blend": 0% = only Osc1,
+    100% = only Osc2, 50% = equal parts of both -- this is how two
+    slightly-detuned oscillators "fatten" a sound, since neither ever lands
+    in exactly the same place in its cycle as the other, so their peaks and
+    zero-crossings constantly drift in and out of alignment, which the ear
+    hears as movement/width rather than a single static pitch). Param5
+    ("Sub Mix") blends in the sub-oscillator, which always tracks the
+    note's true pitch (unaffected by Detune) one octave down. Param6 is
+    unused so far.
 */
 
 #include "userosc.h"
@@ -152,11 +154,10 @@ namespace {
     float cutoffNorm = 0.f; // filter cutoff, 0..1 = Nyquist; set from SHAPE
     float resonance = 0.f;  // filter resonance, 0..k_resonanceMax; set from SHIFT+SHAPE
     float osc1Shape = 0.f;  // Osc1 saw->square blend, 0..1; set from Param1
-    float osc1DetuneCents = 0.f; // Osc1 pitch offset in cents; set from Param2
-    float osc2Shape = 0.f;  // Osc2 saw->square blend, 0..1; set from Param3
-    float osc2DetuneCents = 0.f; // Osc2 pitch offset in cents; set from Param4
-    float blend = 0.f;      // Osc1<->Osc2 crossfade, 0=Osc1 .. 1=Osc2; set from Param5
-    float subLevel = 0.35f; // sub-osc mix amount, 0..1; set from Param6
+    float osc2Shape = 0.f;  // Osc2 saw->square blend, 0..1; set from Param2
+    float detuneCents = 0.f; // spread amount in cents, >=0; Osc1 goes -this, Osc2 goes +this; set from Param3
+    float blend = 0.f;      // Osc1<->Osc2 crossfade, 0=Osc1 .. 1=Osc2; set from Param4
+    float subLevel = 0.35f; // sub-osc mix amount, 0..1; set from Param5
     float ampEnv = 1.f;     // note-on declick ramp, 0 (silent) -> 1 (full level)
     MoogLadder ladder;
   };
@@ -174,10 +175,11 @@ namespace {
   // of the last few percent suddenly screaming into feedback.
   constexpr float k_resonanceMax = 3.8f;
 
-  // Osc1/Osc2 Detune params sweep +/- this many cents. 50 cents (a quarter
-  // tone) per oscillator means the two can spread up to a full semitone
-  // apart at opposite extremes -- enough for an obvious "fat/wide" unison
-  // effect while still sounding like one note, not a chord.
+  // Detune param's maximum spread, in cents: at full Detune, Osc1 sits
+  // this many cents below the note and Osc2 this many above, so the two
+  // are up to twice this apart (100 cents = a full semitone) at opposite
+  // ends of their own cycles -- enough for an obvious "fat/wide" unison
+  // effect while both still stay centered on the note you're playing.
   constexpr float k_maxDetuneCents = 50.f;
 
   // Note-on declick ramp length. Resetting the oscillator phase to 0 on
@@ -208,10 +210,14 @@ void OSC_CYCLE(const user_osc_param_t * const params, int32_t *yn, const uint32_
   const float w0 = osc_w0f_for_note((params->pitch) >> 8, params->pitch & 0xFF);
   const float wSub = w0 * 0.5f; // one octave below the root pitch
 
-  // Detune expressed as a frequency ratio: 2^(cents/1200). fastpow2f is
-  // this SDK's fast approximation of 2^x.
-  const float w1 = w0 * fastpow2f(s_state.osc1DetuneCents * (1.f / 1200.f));
-  const float w2 = w0 * fastpow2f(s_state.osc2DetuneCents * (1.f / 1200.f));
+  // Single Detune spreads the two oscillators symmetrically around the
+  // root pitch -- Osc1 goes flat, Osc2 goes sharp by the same amount --
+  // rather than detuning each independently, which could drift the pair
+  // out of tune with the note itself as you turn the knob. Expressed as a
+  // frequency ratio: 2^(cents/1200). fastpow2f is this SDK's fast
+  // approximation of 2^x.
+  const float w1 = w0 * fastpow2f(-s_state.detuneCents * (1.f / 1200.f));
+  const float w2 = w0 * fastpow2f(s_state.detuneCents * (1.f / 1200.f));
 
   float phase1 = s_state.phase1;
   float phase2 = s_state.phase2;
@@ -321,30 +327,24 @@ void OSC_PARAM(uint16_t index, uint16_t value)
     // Param1 "O1 Shape" (0-100%) -> Osc1 saw->square blend.
     s_state.osc1Shape = clip01f(value * 0.01f);
     break;
-  case k_user_osc_param_id2: {
-    // Param2 "O1 Detune" -- bipolar percent. Per the minilogue xd SDK's
-    // convention for bipolar params, the raw value arrives as 0..200 with
-    // 100 = center (0%), not as the signed -100..100 shown in the manifest.
-    const float pct = (float)((int16_t)value - 100) * 0.01f; // -1..1
-    s_state.osc1DetuneCents = pct * k_maxDetuneCents;
-    break;
-  }
-  case k_user_osc_param_id3:
-    // Param3 "O2 Shape" (0-100%) -> Osc2 saw->square blend.
+  case k_user_osc_param_id2:
+    // Param2 "O2 Shape" (0-100%) -> Osc2 saw->square blend.
     s_state.osc2Shape = clip01f(value * 0.01f);
     break;
-  case k_user_osc_param_id4: {
-    // Param4 "O2 Detune" -- bipolar percent, same convention as O1 Detune.
-    const float pct = (float)((int16_t)value - 100) * 0.01f; // -1..1
-    s_state.osc2DetuneCents = pct * k_maxDetuneCents;
+  case k_user_osc_param_id3:
+    // Param3 "Detune" (0-100%) -> spread amount in cents, applied
+    // symmetrically (Osc1 flat, Osc2 sharp) in OSC_CYCLE. Unipolar and
+    // 0-100%, not bipolar: there's no useful "negative spread" here, since
+    // flipping the sign would just swap which oscillator goes up vs down
+    // with no audible difference.
+    s_state.detuneCents = clip01f(value * 0.01f) * k_maxDetuneCents;
     break;
-  }
-  case k_user_osc_param_id5:
-    // Param5 "Blend" (0-100%) -> Osc1<->Osc2 crossfade.
+  case k_user_osc_param_id4:
+    // Param4 "Blend" (0-100%) -> Osc1<->Osc2 crossfade.
     s_state.blend = clip01f(value * 0.01f);
     break;
-  case k_user_osc_param_id6:
-    // Param6 "Sub Mix" (0-100%) -> sub-oscillator mix amount.
+  case k_user_osc_param_id5:
+    // Param5 "Sub Mix" (0-100%) -> sub-oscillator mix amount.
     s_state.subLevel = clip01f(value * 0.01f);
     break;
   default:

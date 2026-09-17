@@ -7,39 +7,46 @@ file explains what it does and why, at a level above the code comments.
 ## Signal flow
 
 ```
-[ Osc1: saw<->square, detuned ] --+
+[ Osc1: saw<->square, -Detune ] --+
                                    +--> [ blend ] --+
-[ Osc2: saw<->square, detuned ] --+                +--> [ mix ] --> [ 4-pole ladder filter ] --> out
+[ Osc2: saw<->square, +Detune ] --+                +--> [ mix ] --> [ 4-pole ladder filter ] --> out
                                                      |        ^           ^
 [ sub-osc, -1 oct, root pitch ] --------------------+  SHAPE = cutoff     |
                                                                 SHIFT+SHAPE = resonance
 ```
 
 1. **Osc1 / Osc2** — two independent bandlimited (PolyBLEP) oscillators,
-   each morphing from sawtooth to square (its own "Shape" param) and each
-   with its own pitch offset in cents ("Detune"). They're crossfaded
+   each morphing from sawtooth to square (its own "Shape" param), spread
+   apart from the played note by a single **Detune** amount — Osc1 goes
+   flat, Osc2 goes sharp by the same number of cents. They're crossfaded
    together by **Blend** (0% = only Osc1, 100% = only Osc2, 50% = equal
    parts of both) rather than mixed with two separate volume knobs — see
-   "Why a blend, not two volumes" below.
+   "Why a single symmetric Detune" below.
 2. **Sub-oscillator** — a square wave exactly one octave below the note's
    true pitch. It always tracks the root note directly, unaffected by
-   either oscillator's detune, and mixed in underneath via **Sub Mix** to
-   add low-end weight (a common trick on real analog bass patches).
+   Detune, and mixed in underneath via **Sub Mix** to add low-end weight
+   (a common trick on real analog bass patches).
 3. **4-pole ladder filter** — a digital model of the classic Moog transistor
    ladder (24 dB/octave lowpass with resonance/feedback). This is what gives
    the sound its "Moog" character, and it's what **SHAPE** and **SHIFT+SHAPE**
    control together.
 
-### Why a blend, not two volumes
+### Why a single symmetric Detune, not two independent ones
 
 Detuning Osc1 and Osc2 slightly apart from each other is what makes the
 combined sound feel "fat" or "wide" — the two waveforms are never quite in
 sync, so their peaks and zero-crossings constantly drift in and out of
 alignment, which the ear hears as movement rather than a single static
-tone. A single crossfade knob (rather than independent Osc1/Osc2 volumes)
-keeps that effect a one-knob control: at 50% you always hear both in equal
-measure, and sweeping the knob shifts which oscillator dominates without
-also changing the overall loudness.
+tone. The first version of this gave each oscillator its own independent
+detune, but that has a real downside: two separately-tuned knobs can drift
+the *pair* away from the note you're actually playing, not just away from
+each other. A single Detune amount, split symmetrically (Osc1 flat, Osc2
+sharp by the same amount), keeps the perceived center pitch locked to the
+note no matter how far you push it — the two just spread wider apart
+around that center. Blend still handles balance as a single crossfade
+(rather than two separate volumes) for the same reason as before: at 50%
+you always hear both in equal measure, and sweeping the knob shifts which
+oscillator dominates without changing the overall loudness.
 
 ## What the knobs do
 
@@ -53,21 +60,22 @@ also changing the overall loudness.
   fine here since, unlike cutoff, resonance isn't a frequency — there's no
   perceptual reason to curve it. Together, SHAPE and SHIFT+SHAPE behave like
   the cutoff and resonance knobs on a Minimoog's filter section.
-- **Param1 "O1 Shape"** / **Param3 "O2 Shape"** → each oscillator's own
+- **Param1 "O1 Shape"** / **Param2 "O2 Shape"** → each oscillator's own
   0–100% linear crossfade from sawtooth to square.
-- **Param2 "O1 Detune"** / **Param4 "O2 Detune"** → each oscillator's pitch
-  offset, bipolar (-100%..+100%), scaled to +/- `k_maxDetuneCents` (50
-  cents) — so at opposite extremes the two oscillators can spread up to a
-  full semitone apart. These are the SDK's "bipolar percent" params: the
-  manifest shows -100..100, but the raw value handed to the code is
-  actually 0..200 with 100 = center — see the conversion in `OSC_PARAM`.
-- **Param5 "Blend"** → 0–100% crossfade between Osc1 (0%) and Osc2 (100%).
-- **Param6 "Sub Mix"** → sub-oscillator mix amount, 0–100%, linear.
+- **Param3 "Detune"** → spread amount, 0–100% linear, scaled to
+  +/- `k_maxDetuneCents` (50 cents) — Osc1 goes flat by this much, Osc2
+  goes sharp by this much, so at full Detune they're up to a full semitone
+  apart. Unipolar (not bipolar) since there's no useful "negative spread":
+  flipping the sign would only swap which oscillator goes up vs down, with
+  no audible difference.
+- **Param4 "Blend"** → 0–100% crossfade between Osc1 (0%) and Osc2 (100%).
+- **Param5 "Sub Mix"** → sub-oscillator mix amount, 0–100%, linear.
+- **Param6** — not wired up yet.
 
-All six Param slots are now in use. Defaults are whatever the panel/patch
-already has them set to — after this update, existing saved patches will
-have their Param1–6 knob positions reinterpreted for these new roles (the
-params were reordered/expanded), so expect to redial the sound in.
+Defaults are whatever the panel/patch already has them set to — after this
+update, existing saved patches will have their Param1–6 knob positions
+reinterpreted for these new roles (the params were reordered), so expect
+to redial the sound in.
 
 ## What's still a fixed placeholder
 
