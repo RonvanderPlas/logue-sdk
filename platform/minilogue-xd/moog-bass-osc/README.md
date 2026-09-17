@@ -7,26 +7,39 @@ file explains what it does and why, at a level above the code comments.
 ## Signal flow
 
 ```
-[ saw <-> square ] --+
-                       +--> [ mix ] --> [ 4-pole ladder filter ] --> out
-[ sub-osc, -1 oct  ] --+   ^   ^            ^           ^
-            Param2 = Osc Shape |      SHAPE = cutoff     |
-                  Param1 = Sub Mix            SHIFT+SHAPE = resonance
+[ Osc1: saw<->square, detuned ] --+
+                                   +--> [ blend ] --+
+[ Osc2: saw<->square, detuned ] --+                +--> [ mix ] --> [ 4-pole ladder filter ] --> out
+                                                     |        ^           ^
+[ sub-osc, -1 oct, root pitch ] --------------------+  SHAPE = cutoff     |
+                                                                SHIFT+SHAPE = resonance
 ```
 
-1. **Primary oscillator** — a bandlimited (PolyBLEP) sawtooth by default,
-   morphing towards a square wave as "Osc Shape" increases. Saw is
-   bright/buzzy with every harmonic present; square is hollower/woodier
-   with only odd harmonics — genuinely different oscillator colors, not
-   just a filter setting.
-2. **Sub-oscillator** — a square wave exactly one octave below the primary
-   oscillator (independent of Osc Shape — always a plain octave-down
-   square), mixed in underneath to add low-end weight (a common trick on
-   real analog bass patches).
+1. **Osc1 / Osc2** — two independent bandlimited (PolyBLEP) oscillators,
+   each morphing from sawtooth to square (its own "Shape" param) and each
+   with its own pitch offset in cents ("Detune"). They're crossfaded
+   together by **Blend** (0% = only Osc1, 100% = only Osc2, 50% = equal
+   parts of both) rather than mixed with two separate volume knobs — see
+   "Why a blend, not two volumes" below.
+2. **Sub-oscillator** — a square wave exactly one octave below the note's
+   true pitch. It always tracks the root note directly, unaffected by
+   either oscillator's detune, and mixed in underneath via **Sub Mix** to
+   add low-end weight (a common trick on real analog bass patches).
 3. **4-pole ladder filter** — a digital model of the classic Moog transistor
    ladder (24 dB/octave lowpass with resonance/feedback). This is what gives
    the sound its "Moog" character, and it's what **SHAPE** and **SHIFT+SHAPE**
    control together.
+
+### Why a blend, not two volumes
+
+Detuning Osc1 and Osc2 slightly apart from each other is what makes the
+combined sound feel "fat" or "wide" — the two waveforms are never quite in
+sync, so their peaks and zero-crossings constantly drift in and out of
+alignment, which the ear hears as movement rather than a single static
+tone. A single crossfade knob (rather than independent Osc1/Osc2 volumes)
+keeps that effect a one-knob control: at 50% you always hear both in equal
+measure, and sweeping the knob shifts which oscillator dominates without
+also changing the overall loudness.
 
 ## What the knobs do
 
@@ -40,13 +53,21 @@ file explains what it does and why, at a level above the code comments.
   fine here since, unlike cutoff, resonance isn't a frequency — there's no
   perceptual reason to curve it. Together, SHAPE and SHIFT+SHAPE behave like
   the cutoff and resonance knobs on a Minimoog's filter section.
-- **Param1 "Sub Mix"** → sub-oscillator mix amount, 0–100%, linear. Default
-  is whatever the panel/patch has it set to (likely 0% until you dial it in
-  for the first time).
-- **Param2 "Osc Shape"** → primary oscillator waveform, 0–100%, linear
-  crossfade from sawtooth (0%) to square (100%). This only affects the
-  primary oscillator, not the sub.
-- **Param 3–6** — not wired up yet.
+- **Param1 "O1 Shape"** / **Param3 "O2 Shape"** → each oscillator's own
+  0–100% linear crossfade from sawtooth to square.
+- **Param2 "O1 Detune"** / **Param4 "O2 Detune"** → each oscillator's pitch
+  offset, bipolar (-100%..+100%), scaled to +/- `k_maxDetuneCents` (50
+  cents) — so at opposite extremes the two oscillators can spread up to a
+  full semitone apart. These are the SDK's "bipolar percent" params: the
+  manifest shows -100..100, but the raw value handed to the code is
+  actually 0..200 with 100 = center — see the conversion in `OSC_PARAM`.
+- **Param5 "Blend"** → 0–100% crossfade between Osc1 (0%) and Osc2 (100%).
+- **Param6 "Sub Mix"** → sub-oscillator mix amount, 0–100%, linear.
+
+All six Param slots are now in use. Defaults are whatever the panel/patch
+already has them set to — after this update, existing saved patches will
+have their Param1–6 knob positions reinterpreted for these new roles (the
+params were reordered/expanded), so expect to redial the sound in.
 
 ## What's still a fixed placeholder
 

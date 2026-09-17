@@ -6,18 +6,28 @@
 
     Signal flow, once per sample:
 
-        [ saw <-> square ] --+
-                               +--> [ mix ] --> [ 4-pole ladder filter ] --> out
-        [ sub-osc, -1 oct  ] --+   ^   ^            ^           ^
-                    Param2 = Osc Shape |      SHAPE = cutoff     |
-                          Param1 = Sub Mix            SHIFT+SHAPE = resonance
+        [ Osc1: saw<->square, detuned ] --+
+                                           +--> [ blend ] --+
+        [ Osc2: saw<->square, detuned ] --+                +--> [ mix ] --> [ 4-pole ladder filter ] --> out
+                                                             |        ^           ^
+        [ sub-osc, -1 oct, fixed to Osc1's root pitch ] -----+  SHAPE = cutoff     |
+                                                                        SHIFT+SHAPE = resonance
 
     SHAPE and SHIFT+SHAPE are wired directly to the filter's cutoff and
     resonance, so together they behave like the two main knobs of a
-    Minimoog's filter section. Param1 ("Sub Mix") sets how much of the
-    sub-oscillator is blended in, and Param2 ("Osc Shape") morphs the
-    primary oscillator from sawtooth to square. The rest (Param 3-6) is
-    unused so far.
+    Minimoog's filter section.
+
+    The oscillator section is two independent saw<->square oscillators
+    (Param1/2 = Osc1 Shape/Detune, Param3/4 = Osc2 Shape/Detune), each with
+    its own detune in cents, crossfaded together by Param5 ("Blend": 0% =
+    only Osc1, 100% = only Osc2, 50% = equal parts of both -- this is how
+    two slightly-detuned oscillators "fatten" a sound, since neither ever
+    lands in exactly the same place in its cycle as the other, so their
+    peaks and zero-crossings constantly drift in and out of alignment,
+    which the ear hears as movement/width rather than a single static
+    pitch). Param6 ("Sub Mix") blends in the sub-oscillator, which always
+    tracks the note's true pitch (unaffected by either oscillator's
+    detune) one octave down.
 */
 
 #include "userosc.h"
@@ -136,20 +146,25 @@ private:
 namespace {
 
   struct State {
-    float phase0 = 0.f;    // primary saw oscillator phase, wraps in [0,1)
-    float phaseSub = 0.f;  // sub-oscillator phase, runs at half the frequency
+    float phase1 = 0.f;    // Osc1 phase, wraps in [0,1)
+    float phase2 = 0.f;    // Osc2 phase, wraps in [0,1)
+    float phaseSub = 0.f;  // sub-oscillator phase, runs at half the root frequency
     float cutoffNorm = 0.f; // filter cutoff, 0..1 = Nyquist; set from SHAPE
     float resonance = 0.f;  // filter resonance, 0..k_resonanceMax; set from SHIFT+SHAPE
-    float subLevel = 0.35f; // sub-osc mix amount, 0..1; set from Param1 (Sub Mix)
-    float oscShape = 0.f;   // primary osc saw->square blend, 0..1; set from Param2 (Osc Shape)
+    float osc1Shape = 0.f;  // Osc1 saw->square blend, 0..1; set from Param1
+    float osc1DetuneCents = 0.f; // Osc1 pitch offset in cents; set from Param2
+    float osc2Shape = 0.f;  // Osc2 saw->square blend, 0..1; set from Param3
+    float osc2DetuneCents = 0.f; // Osc2 pitch offset in cents; set from Param4
+    float blend = 0.f;      // Osc1<->Osc2 crossfade, 0=Osc1 .. 1=Osc2; set from Param5
+    float subLevel = 0.35f; // sub-osc mix amount, 0..1; set from Param6
     float ampEnv = 1.f;     // note-on declick ramp, 0 (silent) -> 1 (full level)
     MoogLadder ladder;
   };
 
   State s_state;
 
-  // --- Fixed placeholders. These become real knob-controlled parameters
-  //     (Param 2-6) in a later pass; see the project README. --
+  // --- Fixed placeholder. Left as a hardcoded constant for now; see the
+  //     project README. --
   constexpr float k_cutoffMinHz = 60.f;    // SHAPE = 0   -> filter fully closed (dark/thumpy)
   constexpr float k_cutoffMaxHz = 7000.f;  // SHAPE = max -> filter fully open (bright/buzzy)
 
@@ -158,6 +173,12 @@ namespace {
   // way to it) so the full knob travel stays a controllable growl instead
   // of the last few percent suddenly screaming into feedback.
   constexpr float k_resonanceMax = 3.8f;
+
+  // Osc1/Osc2 Detune params sweep +/- this many cents. 50 cents (a quarter
+  // tone) per oscillator means the two can spread up to a full semitone
+  // apart at opposite extremes -- enough for an obvious "fat/wide" unison
+  // effect while still sounding like one note, not a chord.
+  constexpr float k_maxDetuneCents = 50.f;
 
   // Note-on declick ramp length. Resetting the oscillator phase to 0 on
   // every note-on (see OSC_NOTEON) makes the very first sample jump
@@ -180,34 +201,51 @@ void OSC_INIT(uint32_t platform, uint32_t api)
 void OSC_CYCLE(const user_osc_param_t * const params, int32_t *yn, const uint32_t frames)
 {
   // Note pitch (plus any pitch-bend/mod) can change between calls, so the
-  // phase increment is recomputed once per block rather than once per note.
+  // phase increments are recomputed once per block rather than once per
+  // note. w0 is the note's true, undetuned pitch -- the sub-oscillator
+  // always tracks this directly, one octave down, regardless of what Osc1
+  // or Osc2's detune is doing.
   const float w0 = osc_w0f_for_note((params->pitch) >> 8, params->pitch & 0xFF);
-  const float wSub = w0 * 0.5f; // one octave below the main oscillator
+  const float wSub = w0 * 0.5f; // one octave below the root pitch
 
-  float phase0 = s_state.phase0;
+  // Detune expressed as a frequency ratio: 2^(cents/1200). fastpow2f is
+  // this SDK's fast approximation of 2^x.
+  const float w1 = w0 * fastpow2f(s_state.osc1DetuneCents * (1.f / 1200.f));
+  const float w2 = w0 * fastpow2f(s_state.osc2DetuneCents * (1.f / 1200.f));
+
+  float phase1 = s_state.phase1;
+  float phase2 = s_state.phase2;
   float phaseSub = s_state.phaseSub;
   float ampEnv = s_state.ampEnv;
   const float cutoffNorm = s_state.cutoffNorm;
   const float resonance = s_state.resonance;
+  const float osc1Shape = s_state.osc1Shape;
+  const float osc2Shape = s_state.osc2Shape;
+  const float blend = s_state.blend;
   const float subLevel = s_state.subLevel;
-  const float oscShape = s_state.oscShape;
   MoogLadder &ladder = s_state.ladder;
 
   q31_t * __restrict y = (q31_t *)yn;
   const q31_t * const y_end = y + frames;
 
   for (; y != y_end; ++y) {
-    // Primary oscillator: crossfades from sawtooth (oscShape=0) to square
-    // (oscShape=1). A different waveform shape at the source changes the
-    // harmonic content feeding the filter -- saw is bright/buzzy with every
-    // harmonic present, square is hollower/woodier with only odd harmonics.
-    const float saw = blep_saw(phase0, w0);
-    const float square = blep_square(phase0, w0);
-    const float osc0 = (1.f - oscShape) * saw + oscShape * square;
+    // Each oscillator crossfades from sawtooth (shape=0) to square
+    // (shape=1) independently. A different waveform shape at the source
+    // changes the harmonic content feeding the filter -- saw is
+    // bright/buzzy with every harmonic present, square is hollower/woodier
+    // with only odd harmonics.
+    const float osc1 = (1.f - osc1Shape) * blep_saw(phase1, w1) + osc1Shape * blep_square(phase1, w1);
+    const float osc2 = (1.f - osc2Shape) * blep_saw(phase2, w2) + osc2Shape * blep_square(phase2, w2);
+
+    // Osc1/Osc2 crossfade, not a sum -- this is what keeps "Blend" from
+    // needing two separate volume knobs, and it's why detuning them apart
+    // creates movement: at blend=0.5 you're constantly fading between two
+    // waveforms that are very slightly out of sync with each other.
+    const float oscMix = (1.f - blend) * osc1 + blend * osc2;
 
     const float sub = blep_square(phaseSub, wSub);
 
-    float raw = (1.f - subLevel) * osc0 + subLevel * sub;
+    float raw = (1.f - subLevel) * oscMix + subLevel * sub;
     raw = clip1m1f(raw); // keep the filter's input safely within +/-1
     raw *= ampEnv;        // fade in from the note-on phase reset (see OSC_NOTEON)
     ampEnv = clipmaxf(ampEnv + k_declickInc, 1.f);
@@ -223,13 +261,16 @@ void OSC_CYCLE(const user_osc_param_t * const params, int32_t *yn, const uint32_
 
     *y = f32_to_q31(clip1m1f(filtered));
 
-    phase0 += w0;
-    phase0 -= (uint32_t)phase0;
+    phase1 += w1;
+    phase1 -= (uint32_t)phase1;
+    phase2 += w2;
+    phase2 -= (uint32_t)phase2;
     phaseSub += wSub;
     phaseSub -= (uint32_t)phaseSub;
   }
 
-  s_state.phase0 = phase0;
+  s_state.phase1 = phase1;
+  s_state.phase2 = phase2;
   s_state.phaseSub = phaseSub;
   s_state.ampEnv = ampEnv;
 }
@@ -237,11 +278,14 @@ void OSC_CYCLE(const user_osc_param_t * const params, int32_t *yn, const uint32_
 void OSC_NOTEON(const user_osc_param_t * const params)
 {
   (void)params;
-  // Restart both oscillator phases for a consistent attack on every note,
-  // and re-arm the declick ramp (see k_declickInc) to hide the resulting
-  // amplitude jump. The filter's memory is deliberately left alone -- see
-  // the comment in OSC_CYCLE.
-  s_state.phase0 = 0.f;
+  // Restart all three oscillator phases in sync for a consistent attack on
+  // every note (they'll drift apart over the note's sustain if detuned --
+  // that's the intended "movement" effect, just not on the very first
+  // sample), and re-arm the declick ramp (see k_declickInc) to hide the
+  // resulting amplitude jump. The filter's memory is deliberately left
+  // alone -- see the comment in OSC_CYCLE.
+  s_state.phase1 = 0.f;
+  s_state.phase2 = 0.f;
   s_state.phaseSub = 0.f;
   s_state.ampEnv = 0.f;
 }
@@ -274,12 +318,34 @@ void OSC_PARAM(uint16_t index, uint16_t value)
     break;
   }
   case k_user_osc_param_id1:
-    // Param1 "Sub Mix" (0-100%) -> sub-oscillator mix amount.
-    s_state.subLevel = clip01f(value * 0.01f);
+    // Param1 "O1 Shape" (0-100%) -> Osc1 saw->square blend.
+    s_state.osc1Shape = clip01f(value * 0.01f);
     break;
-  case k_user_osc_param_id2:
-    // Param2 "Osc Shape" (0-100%) -> primary oscillator saw->square blend.
-    s_state.oscShape = clip01f(value * 0.01f);
+  case k_user_osc_param_id2: {
+    // Param2 "O1 Detune" -- bipolar percent. Per the minilogue xd SDK's
+    // convention for bipolar params, the raw value arrives as 0..200 with
+    // 100 = center (0%), not as the signed -100..100 shown in the manifest.
+    const float pct = (float)((int16_t)value - 100) * 0.01f; // -1..1
+    s_state.osc1DetuneCents = pct * k_maxDetuneCents;
+    break;
+  }
+  case k_user_osc_param_id3:
+    // Param3 "O2 Shape" (0-100%) -> Osc2 saw->square blend.
+    s_state.osc2Shape = clip01f(value * 0.01f);
+    break;
+  case k_user_osc_param_id4: {
+    // Param4 "O2 Detune" -- bipolar percent, same convention as O1 Detune.
+    const float pct = (float)((int16_t)value - 100) * 0.01f; // -1..1
+    s_state.osc2DetuneCents = pct * k_maxDetuneCents;
+    break;
+  }
+  case k_user_osc_param_id5:
+    // Param5 "Blend" (0-100%) -> Osc1<->Osc2 crossfade.
+    s_state.blend = clip01f(value * 0.01f);
+    break;
+  case k_user_osc_param_id6:
+    // Param6 "Sub Mix" (0-100%) -> sub-oscillator mix amount.
+    s_state.subLevel = clip01f(value * 0.01f);
     break;
   default:
     break;
